@@ -1,6 +1,7 @@
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.StringTokenizer;
+import java.lang.IllegalArgumentException;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
@@ -110,23 +111,31 @@ public class TotalRainfall extends Configured implements Tool {
 		
 		Configuration conf = new Configuration();
 		
-		FileSystem fs = FileSystem.get(conf);
-		
-		if(!fs.exists(inputPath))
+		try
 		{
-			System.out.println("Usage: bin/hadoop jar InstructionalSolutions.jar AverageTempByZipCode <input directory> <ouput directory> <number of reduces>");
-			System.out.println("Error: Input Directory Does Not Exist");
-			System.out.println("Invalid input Path: " + inputPath.toString());
-			return -1;
+			FileSystem fs = FileSystem.get(conf);
+			
+			if(!fs.exists(inputPath))
+			{
+				System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
+				System.out.println("Error: Input Directory Does Not Exist");
+				System.out.println("Invalid input Path: " + inputPath.toString());
+				return -1;
+			}
+			
+			if(fs.exists(outputPath))
+			{
+				System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
+				System.out.println("Error: Output Directory Already Exists");
+				System.out.println("Please delete or specifiy different output directory");
+				return -1;
+			}
+		}
+		catch (IllegalArgumentException e)
+		{
+			System.out.println("INFO: Detected AWS S3 Bucket Directory.");
 		}
 		
-		if(fs.exists(outputPath))
-		{
-			System.out.println("Usage: bin/hadoop jar InstructionalSolutions.jar AverageTempByZipCode <input directory> <ouput directory> <number of reduces>");
-			System.out.println("Error: Output Directory Already Exists");
-			System.out.println("Please delete or specifiy different output directory");
-			return -1;
-		}
 		Job job = new Job(conf, "MapReduceShell Test");
 		
 		job.setNumReduceTasks(numReduces);

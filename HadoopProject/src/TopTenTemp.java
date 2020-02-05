@@ -1,6 +1,9 @@
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.StringTokenizer;
+import java.lang.IllegalArgumentException;
+import java.util.TreeMap;
+import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
@@ -25,7 +28,7 @@ import org.apache.hadoop.util.ToolRunner;
 
 public class TopTenTemp extends Configured implements Tool {
 		
- 	public static class MyMapper extends Mapper<LongWritable, Text, DoubleWritable, Text>
+ 	public static class MyMapper extends Mapper<LongWritable, Text, Text, DoubleWritable>
  	{	
  		private static int STATION_ID	= 0;
 		private static int ZIPCODE		= 1;
@@ -37,6 +40,9 @@ public class TopTenTemp extends Configured implements Tool {
 		private static int YEAR			= 7;
 		private static int MONTH		= 8;
 		
+		private TreeMap<DoubleWritable, Text> tmap = new TreeMap<DoubleWritable, Text>();
+		
+		@Override
  		public void map(LongWritable inputKey, Text inputValue, Context context) throws IOException, InterruptedException
  		{
  			//StationID | Zipcode |  Lat      |  Lon       |  Temp   | Percip | Humid | Year | Month 
@@ -55,36 +61,63 @@ public class TopTenTemp extends Configured implements Tool {
 					return;
  			} //end for
  			
- 			DoubleWritable key = new DoubleWritable( (-1.0) * Double.parseDouble(element[TEMP]));
+ 			DoubleWritable key = new DoubleWritable(Double.parseDouble(element[TEMP]));
  			Text value = new Text(new String(element[ZIPCODE]+" "+element[YEAR]+" "+element[MONTH]));
  			
- 			context.write(key, value);
+ 			tmap.put(key, value);
+ 			if (tmap.size() > 10)
+ 			{
+ 				tmap.remove(tmap.firstKey());
+ 			}
  			
  		}//end map
  		
+		@Override
+ 		protected void cleanup(Context context) throws IOException, InterruptedException 
+ 		{
+ 			// Traverse tree map and write values
+ 			for (Map.Entry<DoubleWritable, Text> node : tmap.descendingMap().entrySet())
+ 			{
+ 				DoubleWritable temp = node.getKey();
+ 				Text value = node.getValue();
+ 				
+ 				context.write(value, temp);
+ 			}
+ 		}
 	}//end MyMapper
+ 	
 
-	public static class MyReducer extends Reducer<DoubleWritable, Text, Text, DoubleWritable>
+	public static class MyReducer extends Reducer<Text, DoubleWritable, Text, DoubleWritable>
 	{
-		static int count;
+		private TreeMap<DoubleWritable, Text> reducerTMap = new TreeMap<DoubleWritable, Text>();
 		
-		public void reduce(DoubleWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException
+		@Override
+		public void reduce(Text key, Iterable<DoubleWritable> values, Context context) throws IOException, InterruptedException
 		{
-			double temp = ((-1.0) * key.get());
+			String value = key.toString();
+			DoubleWritable temp = null;
 			
-			String val = null;
-			
-			for (Text value : values)
+			for (DoubleWritable val : values)
 			{
-				val = value.toString();
+				temp = new DoubleWritable(val.get());
 			}
-			if (count < 10)
+			
+			reducerTMap.put(temp, new Text(value));
+			
+			if (reducerTMap.size() > 10)
 			{
-				context.write(new Text(val), new DoubleWritable(temp));
-				count++;
+				reducerTMap.remove(reducerTMap.firstKey());
 			}
 		}//end reduce
 		
+		@Override
+		public void cleanup(Context context) throws IOException, InterruptedException
+		{
+			for (Map.Entry<DoubleWritable, Text> entry : reducerTMap.descendingMap().entrySet())
+			{
+				context.write(new Text(entry.getValue()), entry.getKey());
+			}
+		}
 	}//end MyReducer
  	
 	public static void main(String[] args) throws Exception
@@ -95,7 +128,6 @@ public class TopTenTemp extends Configured implements Tool {
 	
 	public int run(String[] args) throws Exception 
 	{
-		
 		if(args.length != 3)
 		{
 			System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
@@ -122,24 +154,30 @@ public class TopTenTemp extends Configured implements Tool {
 		
 		Configuration conf = new Configuration();
 		
-		//FileSystem fs = FileSystem.get(conf);
-		
-//		if(!fs.exists(inputPath))
-//		{
-//			System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
-//			System.out.println("Error: Input Directory Does Not Exist");
-//			System.out.println("Invalid input Path: " + inputPath.toString());
-//			return -1;
-//		}
-//		
-//		if(fs.exists(outputPath))
-//		{
-//			System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
-//			System.out.println("Error: Output Directory Already Exists");
-//			System.out.println("Please delete or specifiy different output directory");
-//			return -1;
-//		}
-		
+		try
+		{
+			FileSystem fs = FileSystem.get(conf);
+			
+			if(!fs.exists(inputPath))
+			{
+				System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
+				System.out.println("Error: Input Directory Does Not Exist");
+				System.out.println("Invalid input Path: " + inputPath.toString());
+				return -1;
+			}
+			
+			if(fs.exists(outputPath))
+			{
+				System.out.println("Usage: bin/hadoop jar MapReduceSample.jar WordCount <input directory> <ouput directory> <number of reduces>");
+				System.out.println("Error: Output Directory Already Exists");
+				System.out.println("Please delete or specifiy different output directory");
+				return -1;
+			}
+		}
+		catch (IllegalArgumentException e)
+		{
+			System.out.println("INFO: Detected AWS S3 Bucket Directory.");
+		}
 		
 		conf.set("mapred.child.java.opts", "-Xmx512M");
 		conf.setBoolean("mapred.output.compress", false);
@@ -154,8 +192,8 @@ public class TopTenTemp extends Configured implements Tool {
 		job.setMapperClass(MyMapper.class);
 		
 		//sets map output key/value types
-	    job.setMapOutputKeyClass(DoubleWritable.class);
-	    job.setMapOutputValueClass(Text.class);
+	    job.setMapOutputKeyClass(Text.class);
+	    job.setMapOutputValueClass(DoubleWritable.class);
 	    
 		//Set Reducer class
 	    job.setReducerClass(MyReducer.class);
